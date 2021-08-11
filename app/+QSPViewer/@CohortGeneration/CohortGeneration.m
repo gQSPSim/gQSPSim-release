@@ -26,8 +26,6 @@ classdef CohortGeneration < uix.abstract.CardViewPane
         ParameterPopupItems = {'-'}
         ParameterPopupItemsWithInvalid = {'-'}
         
-        MethodPopupItems = {'Distribution','MCMC'}
-        
         TaskPopupTableItems = {}
         GroupIDPopupTableItems = {}
         SpeciesPopupTableItems = {} % From Tasks
@@ -141,7 +139,7 @@ classdef CohortGeneration < uix.abstract.CardViewPane
         function onFolderSelection(vObj,~,evt) %#ok<*INUSD>
             
             % Update the value
-            vObj.TempData.VPopResultsFolderName = evt.NewValue;
+            vObj.TempData.VPopResultsFolderName_new = evt.NewValue;
             
             % Update the view
             updateResultsDir(vObj);
@@ -214,16 +212,17 @@ classdef CohortGeneration < uix.abstract.CardViewPane
         end %function
         
         function onSaveInvalidPopup(vObj,h,e)
-            values = {'Save all virtual subjects', 'Save valid virtual subjects'};
+            values = get(h,'String');
             vObj.TempData.SaveInvalid = values{get(h,'Value')};
             % Update the view
+            updateSaveInvalid(vObj);
             updateDataset(vObj);
             refreshItemsTable(vObj);
         end
         
         function onMethodPopup(vObj,h,e)
             
-            vObj.TempData.Method = vObj.MethodPopupItems{get(h,'Value')};
+            vObj.TempData.Method = QSP.CohortGeneration.MethodPopupItems{get(h,'Value')};
             if strcmpi(vObj.TempData.Method, 'MCMC')
                 set(vObj.h.MCMCTuningEdit, 'Enable', 'on')
             else
@@ -455,7 +454,7 @@ classdef CohortGeneration < uix.abstract.CardViewPane
                 scrollingPanel = uix.ScrollingPanel('Parent', h); %, 'Units', 'Normalized', 'Position', [0 0 1 1]); %,  'Units', 'pixels', 'Position', [0 0 1000 600]);
 %                 p0.Widths = -1;
 
-                vpopFile = fullfile(vObj.Data.FilePath, vObj.Data.VPopResultsFolderName, vObj.Data.ExcelResultFileName);                
+                vpopFile = fullfile(vObj.Data.FilePath, vObj.Data.VPopResultsFolderName_new, vObj.Data.ExcelResultFileName);                
                 try
                     Raw = readtable(vpopFile);
                     ParamNames = Raw.Properties.VariableNames;
@@ -877,6 +876,7 @@ classdef CohortGeneration < uix.abstract.CardViewPane
             
         end
         
+       
     end
     
     

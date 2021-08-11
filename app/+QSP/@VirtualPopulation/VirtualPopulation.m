@@ -82,7 +82,7 @@ classdef VirtualPopulation < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
                 'Name',obj.Name;
                 'Last Saved',obj.LastSavedTimeStr;
                 'Description',obj.Description;
-                'File Name',obj.RelativeFilePath;                
+                'File Name',obj.RelativeFilePath_new;                
                 'No of Virtual Subjects',obj.NumVirtualPatients;
                 'No of Parameters/species',obj.NumParameters;
                 'Prevalence Weights',obj.PrevalenceWeightsStr;
@@ -166,8 +166,14 @@ classdef VirtualPopulation < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
             
             % Load from file
             try
-                 [Header,Data,StatusOk,Message] = xlread(DataFilePath);
-                 Data = cell2mat(Data);                
+                if verLessThan('matlab', '9.8')
+                    [Header,Data,StatusOk,Message] = xlread(DataFilePath);
+                    Data = cell2mat(Data);
+                else
+                    Table = readtable(DataFilePath,'PreserveVariableNames',true);
+                    Data = table2array(Table);
+                    Header = Table.Properties.VariableNames;
+                end
             catch ME
                  Raw = {};
                  StatusOk = false;

@@ -14,11 +14,6 @@ end
 
 Cancelled = false;
 
-%% update path to include everything in subdirectories of the root folder
-myPath = path;
-%addpath(genpath(obj.Session.RootDirectory));
-
-
 %% parse inputs and initialize
 % [nItems, ResultFileNames, output, Pin, paramNames, extraOutputTimes, simName, allTaskNames, allVpopNames] = parseInputs(obj,varargin);
 
@@ -35,11 +30,12 @@ if ~ThisStatusOK
 end
 
 VpopWeights = [];
-ItemModels = [];
 
 % Initialize waitbar
 Title1 = sprintf('Configuring models...');
-hWbar1 = uix.utility.CustomWaitbar(0,Title1,'',false);
+if obj.Session.ShowProgressBars
+    hWbar1 = uix.utility.CustomWaitbar(0,Title1,'',false);
+end
 
 nBuildItems = options.nBuildItems;
 nRunItems = options.nRunItems;
@@ -55,7 +51,9 @@ else
     
     for ii = 1:nBuildItems
         % update waitbar
-        uix.utility.CustomWaitbar(ii/nBuildItems,hWbar1,sprintf('Configuring model for task %d of %d...',ii,nBuildItems));
+        if obj.Session.ShowProgressBars
+            uix.utility.CustomWaitbar(ii/nBuildItems,hWbar1,sprintf('Configuring model for task %d of %d...',ii,nBuildItems));
+        end
 
         % grab the names of the task and vpop for the i'th simulation
         taskName = obj.Item(ii).TaskName;
@@ -116,16 +114,19 @@ else
     end % for ii...
 end
 % close waitbar
-uix.utility.CustomWaitbar(1,hWbar1,'Done.');
-if ~isempty(hWbar1) && ishandle(hWbar1)
-    delete(hWbar1);
+if obj.Session.ShowProgressBars
+    uix.utility.CustomWaitbar(1,hWbar1,'Done.');
+    if ~isempty(hWbar1) && ishandle(hWbar1)
+        delete(hWbar1);
+    end
 end
-
 
 %%%% Simulate each parameter set in the vpop %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Initialize waitbar
 Title2 = sprintf('Simulating tasks...');
-hWbar2 = uix.utility.CustomWaitbar(0,Title2,'',true);
+if obj.Session.ShowProgressBars
+    hWbar2 = uix.utility.CustomWaitbar(0,Title2,'',true);
+end
 
 %% Cell containing all results
 output = cell(1,nRunItems);
@@ -137,42 +138,58 @@ end
 
 if ~isempty(ItemModels)
     
-
     % update simulation time stamp
     runItems = find(validRunItems); % only those for which no error was produced during model compilation/configuration
     if ~isempty(runItems)
         updateLastSavedTime(obj);        
     end
     
-    task_indices = [];
-    if obj.Session.UseParallel
+    % set up parallel cluster if in use
+    useCluster = options.usePar && ~strcmp(obj.Session.ParallelCluster,'local');
+    
+    if useCluster
+        % cluster parallel
         ParallelCluster = obj.Session.ParallelCluster;
         c = parcluster(ParallelCluster);    
 
         UDF_files = dir(fullfile(taskObj.Session.UserDefinedFunctionsDirectory,'**','*.m'));
         UDF_files = arrayfun(@(x) fullfile(x.folder,x.name), UDF_files, 'UniformOutput', false);
 
+
+        % gQSPSim paths
+        paths = DefinePaths(false,false);
+%         paths = horzcat(paths{:});
+        if ~isempty(paths)
+            paths = strsplit(paths,pathsep);
+            paths(cellfun(@isempty,paths)) = [];
+        end
+        
         RootPath = { fullfile(fileparts(fileparts(mfilename('fullpath'))),'app'); fullfile(fileparts(fileparts(mfilename('fullpath'))),'FromGenentech'); ...
             fullfile(fileparts(fileparts(mfilename('fullpath'))),'utilities')};
-
-        job = createJob(c, 'AttachedFiles', [UDF_files; RootPath]);
+        job = createJob(c, 'AttachedFiles', [UDF_files; RootPath], 'AutoAddClientPath', false); %, 'Type', 'pool');
+        
     else
         job = [];
     end
     
-    taskIndex=1;
-    taskIDs = {};
     for ii = runItems
         ItemModel = ItemModels(options.runIndices(ii));
         if ~StatusOK % interrupted
             break
         end
         % update waitbar
-%         if isempty(hWbar2)
-            set(hWbar2, 'Name', sprintf('Simulating task %d of %d',ii,nRunItems))
-            uix.utility.CustomWaitbar(0,hWbar2,'');
-%         end
-        options.WaitBar = hWbar2;
+        if obj.Session.ShowProgressBars 
+            if isvalid(hWbar2) 
+                set(hWbar2, 'Name', sprintf('Simulating task %d of %d',ii,nRunItems))
+
+                uix.utility.CustomWaitbar(0,hWbar2,'');
+                options.WaitBar = hWbar2;
+            else
+                break % interrupted
+            end
+        else
+            options.WaitBar = [];
+        end
 
         % start simulations for virtual patients
         for jj=1:length(options.Pin)
@@ -184,47 +201,44 @@ if ~isempty(ItemModels)
                 thisOptions.paramNames = {};
             end
             
-            thisOptions.usePar = obj.Session.UseParallel;
+%             thisOptions.usePar = obj.Session.UseParallel;
             thisOptions.ParallelCluster = obj.Session.ParallelCluster;
             thisOptions.UDF = obj.Session.UserDefinedFunctionsDirectory;
             
-            [thisResults, this_nFailedSims, ThisStatusOK, ThisMessage, Cancelled, taskID] = simulateVPatients(ItemModel, thisOptions, Message, job);
-            nFailedSims{ii,jj} = this_nFailedSims;
-            Results_array{ii,jj} = thisResults;
-            StatusOK_array{ii,jj} = ThisStatusOK;
-            Messages{ii,jj} = ThisMessage;
-            if ~isempty(taskID)
-                taskIDs{taskIndex} = taskID;
+            if useCluster
+                job.createTask(@simulateVPatients,5,{ItemModel, thisOptions, true});
+            else
+                [thisResults, this_nFailedSims, ThisStatusOK, ThisMessage, Cancelled] = simulateVPatients(ItemModel, thisOptions, false);
+                nFailedSims{ii,jj} = this_nFailedSims;
+                Results_array{ii,jj} = thisResults;
+                StatusOK_array{ii,jj} = ThisStatusOK;
+                Messages{ii,jj} = ThisMessage;
+                if Cancelled
+                    return
+                end
             end
-            
-            taskIndex = taskIndex + 1;
-                                   
-            task_indices = [task_indices; ii, jj];  
-            
-            
         end
-    end
+    end    
     
-    % run job if set up for cluster computing
-    
-    taskIndex = 1;
-    if ~isempty(taskIDs)
+
+    if useCluster
         set(hWbar2, 'Name', 'Please wait')        
-        uix.utility.CustomWaitbar(0,hWbar2,sprintf('Submitted job with %d tasks to cluster %s.\nWaiting for completion.', nRunItems, ParallelCluster));        
+        if obj.Session.ShowProgressBars
+            uix.utility.CustomWaitbar(0,hWbar2,sprintf('Submitted job with %d tasks to cluster %s.\nWaiting for completion.', nRunItems, ParallelCluster));        
+        end
         submit(job)
         wait(job)
-        data = fetchOutputs(job);
-%         delete(hWbar2);
+        data = fetchOutputs(job);        
         
-        % unpack results
-        
+        % unpack results        
+        taskIndex = 1;
         for ii = runItems        
             for jj=1:length(options.Pin)
                 Results_array{ii,jj} = data{taskIndex, 1};
                 nFailedSims{ii,jj} = data{taskIndex, 2};
                 StatusOK_array{ii,jj} = data{taskIndex, 3};                
                 Messages{ii,jj} = data{taskIndex, 4};           
-                ErrObj{ii,jj} = data{taskIndex,5};
+%                 ErrObj{ii,jj} = data{taskIndex,5};
                 taskIndex = taskIndex + 1;
             end
         end
@@ -232,13 +246,12 @@ if ~isempty(ItemModels)
     end
     
     % gather results
-    taskIndex = 1;
-    if isvalid(hWbar2)
+    if obj.Session.ShowProgressBars && isvalid(hWbar2) 
         set(hWbar2, 'Name', 'Processing results')
     end
     for ii = runItems        
         ItemModel = ItemModels(options.runIndices(ii));
-        if isvalid(hWbar2)
+        if obj.Session.ShowProgressBars && isvalid(hWbar2)
             uix.utility.CustomWaitbar(ii/length(runItems),hWbar2,'');
         end
         for jj=1:length(options.Pin)
@@ -249,17 +262,35 @@ if ~isempty(ItemModels)
                 continue
             end
             
-            %%% Save results of each simulation in different files %%%%%%%%%%%%%%%%%%%%
-            SaveFlag = isempty(options.Pin{1}); % don't save if PIn is provided
+            % Update ResultFileNames
+            % Use the name of the file (even if we don't save to a file) as the "name" for these results.
+            % This is used in testing to identify the corresponding results in a baseline.
+            % For this purpose we don't need a Date/Time stamp. Consider removing it here and adding
+            % it in the SaveFlag block.            
+            if ~isempty(obj.Item(options.runIndices(ii)).Group)
+                grpStr = obj.Item(options.runIndices(ii)).Group;
+            else
+                grpStr = '';
+            end
+
+            ResultFileNames{ii} = ['Results - Sim = ' options.simName ...
+                ', Task = ' obj.Item(options.runIndices(ii)).TaskName ...
+                ' - Vpop = ' obj.Item(options.runIndices(ii)).VPopName ...
+                ' - Group = ' grpStr ...
+                ' - Date = ' datestr(now,'dd-mmm-yyyy_HH-MM-SS') '.mat'];
 
             % keep the VpopWeights for this group
             Results = Results_array{ii,jj};
             Results.VpopWeights = ItemModel.VpopWeights;
+            Results.FileNames = ResultFileNames{ii};
 
             % add results to output cell
             output{jj,ii} = Results;
 
-            SaveFilePath = fullfile(obj.Session.RootDirectory,obj.SimResultsFolderName);
+            %%% Save results of each simulation in different files %%%%%%%%%%%%%%%%%%%%
+            SaveFlag = isempty(options.Pin{1}); % don't save if PIn is provided
+
+            SaveFilePath = fullfile(obj.Session.RootDirectory,obj.SimResultsFolderName_new);
             if ~exist(SaveFilePath,'dir')
                 [ThisStatusOk,ThisMessage] = mkdir(SaveFilePath);
                 if ~ThisStatusOk
@@ -269,17 +300,17 @@ if ~isempty(ItemModels)
             end
 
             if SaveFlag
-                % Update ResultFileNames
-                if ~isempty(obj.Item(options.runIndices(ii)).Group)
-                    grpStr = obj.Item(options.runIndices(ii)).Group;
-                else
-                    grpStr = '';
-                end
-                ResultFileNames{ii} = ['Results - Sim = ' options.simName ...
-                    ', Task = ' obj.Item(options.runIndices(ii)).TaskName ...
-                    ' - Vpop = ' obj.Item(options.runIndices(ii)).VPopName ...
-                    ' - Group = ' grpStr ...
-                    ' - Date = ' datestr(now,'dd-mmm-yyyy_HH-MM-SS') '.mat'];
+                % % Update ResultFileNames
+                % if ~isempty(obj.Item(options.runIndices(ii)).Group)
+                %     grpStr = obj.Item(options.runIndices(ii)).Group;
+                % else
+                %     grpStr = '';
+                % end
+                % ResultFileNames{ii} = ['Results - Sim = ' options.simName ...
+                %     ', Task = ' obj.Item(options.runIndices(ii)).TaskName ...
+                %     ' - Vpop = ' obj.Item(options.runIndices(ii)).VPopName ...
+                %     ' - Group = ' grpStr ...
+                %     ' - Date = ' datestr(now,'dd-mmm-yyyy_HH-MM-SS') '.mat'];
 
                 try
                     if isempty(VpopWeights)
@@ -318,10 +349,7 @@ if ~isempty(ItemModels)
                 StatusOK = false;
                 ThisMessage = 'Unable to save results to MAT file.';
                 Message = sprintf('%s\n%s\n',Message,ThisMessage);
-            end
-            
-            taskIndex = taskIndex + 1;
-            
+            end                        
         end % for jj
 
     end % for ii = ...
@@ -332,9 +360,11 @@ end
 
 
 % close waitbar
-uix.utility.CustomWaitbar(1,hWbar2,'Done.');
-if ~isempty(hWbar2) && ishandle(hWbar2)
-    delete(hWbar2);
+if obj.Session.ShowProgressBars
+    uix.utility.CustomWaitbar(1,hWbar2,'Done.');
+    if ~isempty(hWbar2) && ishandle(hWbar2)
+        delete(hWbar2);
+    end
 end
 
 % output the results of all simulation items if Pin in provided
@@ -347,8 +377,6 @@ if nargout > 5
     varargout{2} = ItemModels;
 end
 
-% restore path
-path(myPath);
 
 end
 
@@ -408,6 +436,12 @@ else
     options.hWaitBar = [];
 end
 
+if nargin>7
+    options.usePar = varargin{7};
+else
+    options.usePar = obj.Session.UseParallel;
+end
+
 % Get the simulation object name
 simName = obj.Name;
 
@@ -425,6 +459,8 @@ options.extraOutputTimes = extraOutputTimes;
 options.simName = simName;
 options.allTaskNames = allTaskNames;
 options.allVpopNames = allVpopNames;
+
+options.ShowProgressBars = obj.Session.ShowProgressBars;
 
 end
 
@@ -492,12 +528,21 @@ function [ItemModel, StatusOK, Message] = constructVpopItem(taskObj, vpopObj, gr
 %             vpopTable = cell2mat(raw(2:end,:));
 %         end
         
-        [params, vpopTable, StatusOK, Message] = xlread(vpopObj.FilePath);
-        vpopTable = cell2mat(vpopTable);
+
+        StatusOK = true;
+        Message = '';
+        if verLessThan('matlab', '9.8')
+            [params, vpopTable, StatusOK, Message] = xlread(vpopObj.FilePath);
+            vpopTable = cell2mat(vpopTable);
+        else
+            vpopTable = readtable(vpopObj.FilePath,'PreserveVariableNames',true);
+            params = vpopTable.Properties.VariableNames;
+            vpopTable = table2array(vpopTable);
+        end
+        
         if ~StatusOK
             return
         end
-        
         
 %         params = params(1,:);
 %         T = readtable(vpopObj.FilePath);
@@ -554,8 +599,3 @@ function [ItemModel, StatusOK, Message] = constructVpopItem(taskObj, vpopObj, gr
     
 end
 
-function [Results, nFailedSims, StatusOK, Message, Cancelled, taskID] = simulateVPatients(ItemModel, options, Message, job)  
-       
-    [Results, nFailedSims, StatusOK, Message, Cancelled, taskID] = simulateVPatients_(ItemModel, options, Message, job);
-    
-end

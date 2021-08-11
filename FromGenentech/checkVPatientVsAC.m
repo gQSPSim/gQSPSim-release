@@ -1,4 +1,4 @@
-function [model_outputs, StatusOK, Message, LB_outputs, UB_outputs, spec_outputs, taskName_outputs, time_outputs, nIC, D] = checkVPatientVsAC(obj, args, grpData, Names0, Values0 )
+function [model_outputs, StatusOK, Message, LB_outputs, UB_outputs, spec_outputs, taskName_outputs, time_outputs, nIC, D, activeSpecData] = checkVPatientVsAC(obj, args, grpData, Names0, Values0 )
 
 % unpack args
 LB = args.LB;
@@ -44,6 +44,11 @@ LB_outputs = [];
 UB_outputs = [];
 taskName_outputs = [];
 model_outputs = [];
+for grpIdx = 1:length(unqGroups) %nItems
+    activeSpecData{grpIdx} = [];
+end
+
+D = 0;
 
 % loop over unique groups in the acceptance criteria file
 for grpIdx = 1:length(unqGroups) %nItems
@@ -61,11 +66,18 @@ for grpIdx = 1:length(unqGroups) %nItems
 
         % simulate
         try
-            simData  = taskObj{grpIdx}.simulate(...
+            OutputTimes_grp = union(taskObj{grpIdx}.OutputTimes, OutputTimes{grpIdx});
+            
+            [simData, StatusOK, Message]  = taskObj{grpIdx}.simulate(...
                 'Names', Names, ...
                 'Values', Values, ...
-                'OutputTimes', OutputTimes{grpIdx});
+                'OutputTimes', OutputTimes_grp);
+               % 'OutputTimes', OutputTimes{grpIdx});
 
+            if ~StatusOK
+                return
+            end
+            
             % for each species in this grp acc crit, find the corresponding
             % model output, grab relevant time points, compare
             uniqueSpecies_grp = unique(Species_grp{grpIdx});
@@ -82,6 +94,13 @@ for grpIdx = 1:length(unqGroups) %nItems
 
                 % grab data for the corresponding model species from the simulation results
                 [simT,simData_spec,specName] = selectbyname(simData,Mappings(specInd,1));
+                
+                % get just the time points needed for evaluation of the
+                % acceptance criteria
+                
+                ixACTimePoints = ismember(simT, OutputTimes{grpIdx});
+                simData_spec = simData_spec(ixACTimePoints, :);
+                simT = simT(ixACTimePoints,:);
 
                 try
                     % transform the model outputs to match the data
@@ -119,13 +138,29 @@ for grpIdx = 1:length(unqGroups) %nItems
 
 
             end % for spec
+            
+            % save the data from this simulation for caching
+             % extract active species data, if specified
+            if ~isempty(taskObj{grpIdx}.ActiveSpeciesNames)
+                [~,activeSpecData{grpIdx}] = selectbyname(simData,taskObj{grpIdx}.ActiveSpeciesNames);
+            else
+                [~,activeSpecData{grpIdx}] = selectbyname(simData,taskObj{grpIdx}.SpeciesNames);                
+            end
+
+
+            
         catch ME2
             % if the simulation fails, replace model outputs with Inf so
             % that the parameter set fails the acceptance criteria
             model_outputs = [model_outputs;Inf*ones(length(grpInds),1)];
             LB_outputs = [LB_outputs;NaN(length(grpInds),1)];            
             UB_outputs = [UB_outputs;NaN(length(grpInds),1)];
+            taskName_outputs = [taskName_outputs; NaN(length(grpInds),1)];
+            spec_outputs = [spec_outputs; NaN(length(grpInds),1)];
+            time_outputs = [time_outputs; NaN(length(grpInds),1)];
+                
             StatusOK = false;
+            Message = getReport(ME2);
             D = inf;
         end
     end % for ixIC

@@ -168,7 +168,7 @@ classdef App < uix.abstract.AppWithSessionFiles & uix.mixin.ViewPaneManager
     end
     
     properties(Constant)
-        Version = 'v1.0'
+        Version = 'v1.1'
     end
         
     %% Methods in separate files with custom permissions
@@ -180,7 +180,8 @@ classdef App < uix.abstract.AppWithSessionFiles & uix.mixin.ViewPaneManager
         % Overloaded methods for file session operations
         createNewSession(obj,Session)
         StatusOk = saveSessionToFile(obj,FilePath,idx)
-        StatusOk = loadSessionFromFile(obj,FilePath)
+        StatusOk = loadSessionFromFile(obj, FilePath, interactiveTF)        
+       
         StatusOk = closeSession(obj,idx)
         
         % To add a session to the tree
@@ -222,7 +223,7 @@ classdef App < uix.abstract.AppWithSessionFiles & uix.mixin.ViewPaneManager
             set(obj.Figure,'Visible','on')       
             
             % check version
-            QSPViewer.App.checkForUpdates() % TODO reenable when repo is
+%             QSPViewer.App.checkForUpdates() % TODO reenable when repo is
 %             public
             
             
@@ -369,9 +370,9 @@ classdef App < uix.abstract.AppWithSessionFiles & uix.mixin.ViewPaneManager
         end %function
                 
         function onHelpAbout(obj,h,e)
-           msgbox({'gQSPsim version 1.0', ...
+           msgbox({['gQSPsim version ', obj.Version], ...
                '', ...
-               'http://www.github.com/feigelman/gQSPsim', ...
+               'http://www.github.com/gQSPSim/gQSPsim-release', ...
                '', ...
                'Authors:', ...
                '', ...
@@ -716,10 +717,14 @@ classdef App < uix.abstract.AppWithSessionFiles & uix.mixin.ViewPaneManager
             SelNode = obj.h.SessionTree.SelectedNodes;
             
             % What is the data object?
-            ThisObj = SelNode.Value;
+            ThisObj = {SelNode.Value};
             
             % Confirm with user
-            Prompt = sprintf('Permanently delete "%s"?', SelNode.Name);
+            if length(SelNode) > 1
+                Prompt = sprintf('Permanently delete %d selected items?', length(SelNode));
+            else
+                Prompt = sprintf('Permanently delete "%s"?', SelNode.Name);
+            end
             Result = questdlg(Prompt,'Permanently Delete','Delete','Cancel','Cancel');
             if strcmpi(Result,'Delete')
                 
@@ -730,17 +735,24 @@ classdef App < uix.abstract.AppWithSessionFiles & uix.mixin.ViewPaneManager
                     delete(SelNode.Children);
                 else
                     % Delete the selected item
-                    MatchIdx = false(size(ThisSession.Deleted));
-                    for idx = 1:numel(ThisSession.Deleted)
-                        MatchIdx(idx) = ThisSession.Deleted(idx)==ThisObj;
-                    end
+                    selectedTree = SelNode(1).Tree;
+                    parent = SelNode(1).Parent;
+                    
+                    for idxObj = 1:length(ThisObj)
+                        MatchIdx = false(size(ThisSession.Deleted));    
+                        for idx = 1:numel(ThisSession.Deleted)
+                            MatchIdx(idx) = ThisSession.Deleted(idx)==ThisObj{idxObj};
+                        end
+                        ThisSession.Deleted( MatchIdx ) = [];                  
                     % Remove from deleted items in the session
-                    ThisSession.Deleted( MatchIdx ) = [];
                     % Select parent before deletion, so we don't deselect
                     % the session
-                    SelNode.Tree.SelectedNodes = SelNode.Parent;
-                    % Now delete tree node
-                    delete(SelNode);
+                    
+%                         SelNode(idxObj).Tree.SelectedNodes(idxObj) = SelNode(idxObj).Parent;
+                        % Now delete tree node
+                        delete(SelNode(idxObj));
+                    end                    
+                    selectedTree.SelectedNodes = parent;
                 end
                 
                 % Mark the current session dirty
@@ -924,6 +936,58 @@ classdef App < uix.abstract.AppWithSessionFiles & uix.mixin.ViewPaneManager
             end
         end %function
         
+        function addItemToSession(obj, ThisSession, ItemType, ThisObj, ItemName)
+            % add an node to the tree which corresponds to the data that is
+            % passed in
+                       
+            % Where does the item go?
+            if isprop(ThisSession,ItemType)
+                ParentObj = ThisSession;
+            else
+                ParentObj = ThisSession.Settings;
+            end
+            
+            % What tree branch does this go under?
+            ChildNodes = ParentObj.TreeNode.Children;
+            ChildTypes = {ChildNodes.UserData};
+            if any(strcmpi(ItemType,{'Simulation','Optimization','CohortGeneration','VirtualPopulationGeneration'}))
+                ThisChildNode = ChildNodes(strcmpi(ChildTypes,'Functionalities'));
+                ChildNodes = ThisChildNode.Children;
+                ChildTypes = {ChildNodes.UserData};
+            end
+            ParentNode = ChildNodes(strcmp(ChildTypes,ItemType));
+            
+            % Create the new item
+            NewName = ItemName;           
+            DisallowedNames = {ParentObj.(ItemType).Name};
+            NewName = matlab.lang.makeUniqueStrings(NewName, DisallowedNames);
+            ThisObj.Name = NewName;
+            
+            if isprop(ThisObj,'Settings')
+                ThisObj.Settings = ThisSession.Settings;
+            end
+            if isprop(ThisObj,'Session')
+                ThisObj.Session = ThisSession;
+            end
+            
+            % Place the item and add the tree node
+            if isscalar(ParentNode)
+                ParentObj.(ItemType)(end+1) = ThisObj;
+                obj.createTree(ParentNode, ThisObj);
+                ParentNode.expand();
+            else
+                error('Invalid tree parent');
+            end
+            
+            % Mark the current session dirty
+            obj.markDirty();
+            
+            % Update the display
+            obj.refresh();            
+            
+        end
+       
+    
     end %methods    
     
     
@@ -952,21 +1016,35 @@ classdef App < uix.abstract.AppWithSessionFiles & uix.mixin.ViewPaneManager
     
     methods (Static)
         function checkForUpdates()
+            % Preserving this functionality now, but updates for users will move to 
+            % file exchange notifications rather than this method. This because we are making the 
+            % app distribution mechanism MLTBX based rather than GitHub based. 
+
+            gitHubRepoName = 'gQSPSim/gQSPsim-release';
 
             w = weboptions('CertificateFile','');
-            webData = webread('https://api.github.com/repos/feigelman/gQSPsim-release/tags', w); % TODO: correct repo!
-
+            try
+                webData = webread(['https://api.github.com/repos/',gitHubRepoName,'/tags'], w); 
+            catch err
+                warning('Check for updates failed.\n%s', err.message)
+                return
+            end
+            
+                    
             if ~isempty(webData) && isstruct(webData) && isfield(webData,'name')
+                repoURL = ['https://www.github.com/',gitHubRepoName];
+
                 webVersion = webData(1).name;
                 if ~strcmp(webVersion, QSPViewer.App.Version)            
-                    doUpdate = questdlg('A newer version of gQSPsim is available. Please visit the gQSPsim repository http://www.github.com/feigelman/gQSPsim-release/ for the latest version.', ...                
+                    doUpdate = questdlg(['A newer version of gQSPsim is available. Please visit the gQSPsim repository ', repoURL, ' for the latest version.'], ...             
                         'Newer version available', ...
                         'Get latest version', 'Cancel', 'Get latest version');
                     if strcmp(doUpdate,  'Get latest version')
-                        web('https://www.github.com/feigelman/gQSPsim-release','-browser');
+                        web(repoURL,'-browser');
                     end
                 end
             end
         end
     end
+    
 end %classdef

@@ -15,7 +15,9 @@ end
 % Initialize waitbar
 Title = sprintf('Run Optimization');
 DialogMessage = sprintf('Optimization in progress. Please wait...');
-hDlg = warndlg(DialogMessage,Title,'modal');
+if obj.Session.ShowProgressBars
+    hDlg = warndlg(DialogMessage,Title,'modal');
+end
 
 StatusOK = true;
 Message = '';
@@ -247,6 +249,13 @@ for ii = 1:nItems
 
     % get the task obj from the settings obj
     tskInd = find(strcmp(obj.Item(ii).TaskName,{obj.Settings.Task.Name}));
+    if nnz(tskInd) ~= 1
+        StatusOK = false;
+        Message = 'Invalid task for optimization';
+        return
+    end
+    
+       
     tObj_i = obj.Settings.Task(tskInd);
     
     % Validate
@@ -294,6 +303,15 @@ switch obj.AlgorithmName
         
     case 'ParticleSwarm'
         N = size(estParamData,1);
+        
+        if license('test','GADS_Toolbox') == 0
+            StatusOK = false;
+            ThisMessage = 'The particle swarm method is not available. Please install the Global Optimization Toolbox in order to use the particle swarm method.';
+            Message = sprintf('%s\n%s\n',Message,ThisMessage);
+            path(myPath);
+            return
+        end
+        
         try
             StatusOK = true;
             LB = estParamData(:,1);
@@ -301,7 +319,7 @@ switch obj.AlgorithmName
             p0 = estParamData(:,3);
 
             options = optimoptions('ParticleSwarm', 'Display', 'iter', 'FunctionTolerance', .1, 'MaxTime', 12000, ...
-                'UseParallel', obj.Session.UseParallel, 'FunValCheck', 'on', 'UseVectorized', false, 'PlotFcn',  @pswplotbestf, ...
+                'UseParallel', logical(obj.Session.UseParallel), 'FunValCheck', 'on', 'UseVectorized', false, 'PlotFcn',  @pswplotbestf, ...
                 'InitialSwarmMatrix', p0');
             
             VpopParams = particleswarm( @(est_p) objectiveFun(est_p',paramObj,ItemModels,Groups,IDs,Time,optimData,dataNames,obj), N, LB, UB, options);
@@ -320,13 +338,14 @@ switch obj.AlgorithmName
         UB = estParamData(:,2);
 
         % options
-        LSQopts = optimoptions(@lsqnonlin,'MaxFunctionEvaluations',1e4,'MaxIterations',1e4,'UseParallel',false,'FunctionTolerance',1e-5,'StepTolerance',1e-3,...
+        opts = optimoptions(@fmincon,'MaxFunctionEvaluations',1e4,'MaxIterations',1e4, 'FunctionTolerance',1e-5,'StepTolerance',1e-3,...
             'Display', 'iter', 'PlotFcn', @optimplotfval, 'UseParallel', obj.Session.UseParallel );
-
+        
         % fit
         p0 = estParamData(:,3);
         try
-        VpopParams = lsqnonlin(@(est_p) objectiveFun(est_p,paramObj,ItemModels,Groups,IDs,Time,optimData,dataNames,obj), p0, LB, UB, LSQopts);
+        
+        VpopParams = fmincon(@(est_p) objectiveFun(est_p,paramObj,ItemModels,Groups,IDs,Time,optimData,dataNames,obj), p0, [], [], [], [], LB, UB, [], opts);        
         VpopParams = VpopParams';
         catch err
             StatusOK = false;
@@ -431,7 +450,7 @@ else
 
         % save current group's Vpop
         SaveFlag = true;
-        SaveFilePath = fullfile(obj.Session.RootDirectory,obj.OptimResultsFolderName);
+        SaveFilePath = fullfile(obj.Session.RootDirectory,obj.OptimResultsFolderName_new);
         if ~exist(SaveFilePath,'dir')
             [ThisStatusOk,ThisMessage] = mkdir(SaveFilePath);
             if ~ThisStatusOk
@@ -487,7 +506,7 @@ Vpop = [ VpopHeaders; VpopData];
 
 % save final Vpop
 SaveFlag = true;
-SaveFilePath = fullfile(obj.Session.RootDirectory,obj.OptimResultsFolderName);
+SaveFilePath = fullfile(obj.Session.RootDirectory,obj.OptimResultsFolderName_new);
 if ~exist(SaveFilePath,'dir')
     [ThisStatusOk,ThisMessage] = mkdir(SaveFilePath);
     if ~ThisStatusOk
@@ -498,7 +517,7 @@ end
 
 if SaveFlag
     VpopNames{end} = ['Results - Optimization = ' obj.Name ' - Date = ' timeStamp];
-    ResultsFileNames{end} = [VpopNames{end} '.xls'];
+    ResultsFileNames{end} = [VpopNames{end} '.xlsx'];
     try
         if ispc
             xlswrite(fullfile(SaveFilePath,ResultsFileNames{end}),Vpop);
@@ -521,6 +540,11 @@ end
     function [objective,varargout] = objectiveFun(est_p,paramObj,ItemModels,Groups,IDs,Time,optimData,dataNames,obj)
         tempStatusOK = true;
         tempMessage = '';
+        
+        if nargout>1 % preset the output arguments
+            varargout{1} = true;
+            varargout{2} = '';
+        end
         
 %         inputStr = '(species,data,simTime,dataTime,allData,ID,Grp,currID,currGrp)';
         logInds = reshape( paramObj.logInds, [], 1);
@@ -583,7 +607,9 @@ end
  
                     % simulate experiment for this ID
                     OutputTimes = sort(unique(Time_id(Time_id>=0)));
-                    StopTime = max(Time_id(Time_id>=0));
+                    maxTime = max(Time_id(Time_id>=0));
+                    OutputTimes = OutputTimes(OutputTimes <= maxTime);
+
                     Values = [IC;est_p];
                     Names = [{SpeciesIC.SpeciesName}'; estParamNames];
                     if ~isempty(fixed_p)
@@ -594,8 +620,7 @@ end
                     [simData_id, thisStatusOK, thisMessage] = ItemModels.Task(grpIdx).simulate(...
                         'Names', Names, ...
                         'Values', Values, ...
-                        'OutputTimes', OutputTimes, ...
-                        'StopTime', StopTime );
+                        'OutputTimes', OutputTimes);
                     
                     if ~thisStatusOK
                         % simulation failed for this particular task
@@ -604,7 +629,9 @@ end
                         % for this group
                         Message = sprintf('%s\n%s\n', Message, thisMessage);
                         fprintf('Warning: Group %d produced error %s\n', currGrp, thisMessage);
-                        
+                        objective = 1e6;
+                        path(myPath);
+                        return                             
                     end
                                         
                     % generate elements of objective vector by comparing model
@@ -705,14 +732,15 @@ end
                 end % for id
             end % for grp
         end % try
-               
-        if ~strcmp(obj.AlgorithmName, 'Local')
-            % return scalar objective function
-            objective = nansum(objectiveVec);
-        else
-            objective = objectiveVec;
-        end
-        
+%                
+%         if ~strcmp(obj.AlgorithmName, 'Local')
+%             % return scalar objective function
+%             objective = nansum(objectiveVec);
+%         else
+%             objective = objectiveVec;
+%         end
+        objective = nansum(objectiveVec);
+
         if nargout>1
             varargout{1} = tempStatusOK;
             varargout{2} = tempMessage;
@@ -723,7 +751,7 @@ end
 path(myPath);
 
 % close dialog
-if ~isempty(hDlg) && ishandle(hDlg)
+if obj.Session.ShowProgressBars && ~isempty(hDlg) && ishandle(hDlg)
     delete(hDlg);
 end
 

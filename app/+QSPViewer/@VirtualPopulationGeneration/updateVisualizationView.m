@@ -30,14 +30,14 @@ if vObj.Selection ~= 3
     return;
 end
 
-%% update plot style
+
+
+%% Set max num traces to display
+
 if ~isempty(vObj.Data)
-    vObj.Data.bShowTraces = vObj.bShowTraces;
-    vObj.Data.bShowQuantiles = vObj.bShowQuantiles;
-    vObj.Data.bShowMean = vObj.bShowMean;
-    vObj.Data.bShowMedian = vObj.bShowMedian;
-    vObj.Data.bShowSD = vObj.bShowSD;
+    set(vObj.h.MaxTracesEdit,'Value',vObj.Data.MaxTracesToDisplay);
 end
+
 
 %% Update table contextmenu
 
@@ -157,7 +157,7 @@ if ~isempty(vObj.Data)
     end
     
     % Check which results files are invalid
-    ResultsDir = fullfile(vObj.Data.Session.RootDirectory,vObj.Data.VPopResultsFolderName);
+    ResultsDir = fullfile(vObj.Data.Session.RootDirectory,vObj.Data.VPopResultsFolderName_new);
     if exist(fullfile(ResultsDir,vObj.Data.ExcelResultFileName),'file') == 2
         FlagIsInvalidResultFile = false; % Exists, not invalid
     else

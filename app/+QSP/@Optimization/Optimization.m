@@ -29,7 +29,9 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
     %% Properties
     properties
         Settings = QSP.Settings.empty(0,1)
-        OptimResultsFolderName = 'OptimResults' 
+        OptimResultsFolderPath = {'OptimResults'};
+        OptimResultsFolderName = ''
+        
         ExcelResultFileName = {} % At least one file
         VPopName = {} % At least one Vpop
         
@@ -57,6 +59,7 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
         SelectedPlotLayout = '1x1'        
         
         PlotSettings = repmat(struct(),1,12)
+        
     end
     
     properties (SetAccess = 'private')
@@ -75,6 +78,12 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
     properties (Transient=true)
         ItemModels = []; % cached Item Models
         Results = []; % cached results
+    end
+    
+    properties (Dependent=true)
+        TaskGroupItems
+        SpeciesDataMapping
+        OptimResultsFolderName_new
     end
     
     %% Constructor
@@ -97,9 +106,11 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
             %    aObj = QSP.Optimization();
             
             % Populate public properties from P-V input pairs
-            obj.assignPVPairs(varargin{:});
+            obj.assignPVPairs(varargin{:});   
             
             % For compatibility
+            initOptions(obj);
+            
             if size(obj.PlotSpeciesTable,2) == 4
                 obj.PlotSpeciesTable(:,5) = obj.PlotSpeciesTable(:,3);
             end
@@ -124,7 +135,7 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
         function Summary = getSummary(obj)
             
             if ~isempty(obj.Item)
-                OptimizationItems = {};
+                TheseOptimizationItems = {};
                 % Check what items are stale or invalid
                 [StaleFlag,ValidFlag,InvalidMessages] = getStaleItemIndices(obj);
 
@@ -145,10 +156,10 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
                     if index < numel(obj.Item)
                         ThisItem = sprintf('%s\n',ThisItem);
                     end
-                    OptimizationItems = [OptimizationItems; ThisItem]; %#ok<AGROW>
+                    TheseOptimizationItems = [TheseOptimizationItems; ThisItem]; %#ok<AGROW>
                 end
             else
-                OptimizationItems = {};
+                TheseOptimizationItems = {};
             end
 
             % Species-Data mapping
@@ -204,11 +215,11 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
                 'Name',obj.Name;
                 'Last Saved',obj.LastSavedTimeStr;
                 'Description',obj.Description;
-                'Results Path',obj.OptimResultsFolderName;
+                'Results Path',obj.OptimResultsFolderName_new;
                 'Optimization Algorithm',obj.AlgorithmName;
                 'Dataset',obj.DatasetName;
                 'Group Name',obj.GroupName;
-                'Items',OptimizationItems;
+                'Items',TheseOptimizationItems;
                 'Parameter File',obj.RefParamName;
                 'Parameters Used for Optimization',UsedParamNames;
                 'Fixed Parameters', UnusedParamNames;
@@ -360,7 +371,7 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
                  
                 % Check Objective Fcn
                 if exist(obj.Session.ObjectiveFunctionsDirectory,'dir')
-                    FileList = dir(obj.Session.ObjectiveFunctionsDirectory);
+                    FileList = dir(fullfile(obj.Session.ObjectiveFunctionsDirectory,'*.m'));
                     IsDir = [FileList.isdir];
                     ObjectiveFcns = {FileList(~IsDir).name};
                     ObjectiveFcns = vertcat({'defaultObj'},ObjectiveFcns(:));
@@ -372,7 +383,7 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
                 % Check Species (Mapping)
                 if any(SpeciesMappingIndex == 0)
                     BadValues = {obj.SpeciesData(SpeciesMappingIndex==0).SpeciesName};
-                    ThisMessage = sprintf('Invalid species: %s',uix.utility.cellstr2dlmstr(BadValues,','));
+                    ThisMessage = sprintf('Invalid species name: %s',uix.utility.cellstr2dlmstr(BadValues,','));
                     StatusOK = false;
                     Message = sprintf('%s\n* %s\n',Message,ThisMessage);
                 end
@@ -380,7 +391,7 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
                  % Check Data (Mapping)
                 if any(DataMappingIndex == 0)
                     BadValues = {obj.SpeciesData(DataMappingIndex==0).DataName};
-                    ThisMessage = sprintf('Invalid data: %s',uix.utility.cellstr2dlmstr(BadValues,','));
+                    ThisMessage = sprintf('Invalid data name: %s',uix.utility.cellstr2dlmstr(BadValues,','));
                     StatusOK = false;
                     Message = sprintf('%s\n* %s\n',Message,ThisMessage);
                 else
@@ -424,7 +435,7 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
                 % Check Species (IC)
                 if any(SpeciesMappingIndex == 0)
                     BadValues = {obj.SpeciesIC(SpeciesMappingIndex==0).SpeciesName};
-                    ThisMessage = sprintf('Invalid species: %s',uix.utility.cellstr2dlmstr(BadValues,','));
+                    ThisMessage = sprintf('Invalid species name: %s',uix.utility.cellstr2dlmstr(BadValues,','));
                     StatusOK = false;
                     Message = sprintf('%s\n* %s\n',Message,ThisMessage);
                 end
@@ -432,7 +443,7 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
                  % Check Data (IC)
                 if any(DataMappingIndex == 0)
                     BadValues = {obj.SpeciesIC(DataMappingIndex==0).DataName};
-                    ThisMessage = sprintf('Invalid species: %s',uix.utility.cellstr2dlmstr(BadValues,','));
+                    ThisMessage = sprintf('Invalid data name: %s',uix.utility.cellstr2dlmstr(BadValues,','));
                     StatusOK = false;
                     Message = sprintf('%s\n* %s\n',Message,ThisMessage);
                 end
@@ -505,7 +516,8 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
             if isempty(thisObj)            
                 % Virtual Population
                 Names = {obj.Settings.VirtualPopulation.Name};
-                [~,ThisName] = fileparts(NewSource);
+%                 [~,ThisName] = fileparts(NewSource);
+                ThisName = NewSource;
                 MatchIdx = strcmpi(Names,ThisName);
                 if any(MatchIdx)
                     thisObj = obj.Settings.VirtualPopulation(MatchIdx);
@@ -643,7 +655,7 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
                         thisVpopObj = QSP.VirtualPopulation;
                         thisVpopObj.Session = obj.Session;
                         thisVpopObj.Name = VPopNames{idx};
-                        thisVpopObj.FilePath = fullfile(obj.Session.RootDirectory,obj.OptimResultsFolderName,obj.ExcelResultFileName{idx});
+                        thisVpopObj.FilePath = fullfile(obj.Session.RootDirectory,obj.OptimResultsFolderName_new,obj.ExcelResultFileName{idx});
                         % Update last saved time
                         updateLastSavedTime(thisVpopObj);
                         % Validate
@@ -703,6 +715,24 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
             else
                 vpopObj = QSP.VirtualPopulation.empty(0,1);
             end
+            
+            Message = strtrim(Message);
+            
+            
+            % Special handling for API
+            if nargout == 0
+               if StatusOK && isempty(Message) 
+                   disp('Optimization ran successfully')
+               elseif StatusOK && ~isempty(Message)
+                   warning(Message)
+               else
+                   error(Message)
+               end
+               
+               % Append
+               obj.Settings.VirtualPopulation(end+1) = vpopObj;
+            end
+            
         end %function
         
         function updateSpeciesLineStyles(obj)
@@ -805,14 +835,19 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
                     if ~isempty(pObj)
                         ParametersLastSavedTime = pObj.LastSavedTime;
                         FileInfo = dir(pObj.FilePath);
-                        ParametersFileLastSavedTime = FileInfo.datenum;                    
+                        if ~isempty(FileInfo)
+                            ParametersFileLastSavedTime = FileInfo.datenum;                    
+                        else
+                            ParametersFileLastSavedTime = 0;
+                        end
+                            
                     end
                     % Results file
                     if length(obj.ExcelResultFileName) < numel(obj.Item) ... % missing some items
                             || isempty(obj.ExcelResultFileName{index}) % no excel file available for this index
                         ResultLastSavedTime = '';        
                     else
-                        ThisFilePath = fullfile(obj.Session.RootDirectory,obj.OptimResultsFolderName,obj.ExcelResultFileName{index});
+                        ThisFilePath = fullfile(obj.Session.RootDirectory,obj.OptimResultsFolderName_new,obj.ExcelResultFileName{index});
                         if exist(ThisFilePath,'file') == 2
                             FileInfo = dir(ThisFilePath);                        
                             ResultLastSavedTime = FileInfo.datenum;                        
@@ -861,9 +896,13 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
             obj.Settings = Value;
         end
         
-        function set.OptimResultsFolderName(obj,Value)
+        function set.OptimResultsFolderName_new(obj,Value)
             validateattributes(Value,{'char'},{'row'});
-            obj.OptimResultsFolderName = Value;
+            obj.OptimResultsFolderPath = strsplit(Value,filesep);
+        end
+        
+        function Value=get.OptimResultsFolderName_new(obj)
+            Value = strjoin(obj.OptimResultsFolderPath,filesep);
         end
         
         function set.DatasetName(obj,Value)
@@ -927,6 +966,50 @@ classdef Optimization < QSP.abstract.BaseProps & uix.mixin.HasTreeReference
             validateattributes(Value,{'struct'},{});
             obj.PlotSettings = Value;
         end
+        
+        function set.TaskGroupItems(obj,Value)
+            validateattributes(Value,{'cell'},{'size',[nan,2]});
+            
+            NewTaskGroup = QSP.TaskGroup.empty;
+            for idx = 1:size(Value,1)
+                GroupID = Value{idx,2};
+                if isnumeric(GroupID)
+                    GroupID = num2str(GroupID);
+                end
+                NewTaskGroup(end+1) = QSP.TaskGroup(...
+                    'TaskName',Value{idx,1},...
+                    'GroupID',GroupID); %#ok<AGROW>
+            end
+            obj.Item = NewTaskGroup;
+        end
+        
+        function Value = get.TaskGroupItems(obj)
+            TaskNames = {obj.Item.TaskName};
+            GroupIDs = {obj.Item.GroupID};
+            
+            Value = [TaskNames(:) GroupIDs(:)];
+        end
+        
+        function set.SpeciesDataMapping(obj,Value)
+            validateattributes(Value,{'cell'},{'size',[nan,3]});
+            
+            NewSpeciesData = QSP.SpeciesData.empty;
+            for idx = 1:size(Value,1)
+                NewSpeciesData(end+1) = QSP.SpeciesData(...
+                    'SpeciesName',Value{idx,2},...
+                    'DataName',Value{idx,1},...
+                    'FunctionExpression',Value{idx,3}); %#ok<AGROW>
+            end
+            obj.SpeciesData = NewSpeciesData;
+        end
+        
+        function Value = get.SpeciesDataMapping(obj)
+            SpeciesNames = {obj.SpeciesData.SpeciesName};
+            DataNames = {obj.SpeciesData.DataName};
+            
+            Value = [DataNames(:) SpeciesNames(:)];
+        end
+        
         
     end %methods
     

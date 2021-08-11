@@ -48,14 +48,14 @@ if ~isempty(vObj.Data)
     end
 end
 
-%% update plot style
+
+
+%% Set max num traces to display
+
 if ~isempty(vObj.Data)
-    vObj.Data.bShowTraces = vObj.bShowTraces;
-    vObj.Data.bShowQuantiles = vObj.bShowQuantiles;
-    vObj.Data.bShowMean = vObj.bShowMean;
-    vObj.Data.bShowMedian = vObj.bShowMedian;
-    vObj.Data.bShowSD = vObj.bShowSD;
+    set(vObj.h.MaxTracesEdit,'Value',vObj.Data.MaxTracesToDisplay);
 end
+
 
 %% Update table contextmenus
 
@@ -205,7 +205,7 @@ if ~isempty(vObj.Data)
     end
     
     % Check which results files are invalid
-    ResultsDir = fullfile(vObj.Data.Session.RootDirectory,vObj.Data.SimResultsFolderName);
+    ResultsDir = fullfile(vObj.Data.Session.RootDirectory,vObj.Data.SimResultsFolderName_new);
     
     % Only make the "valids" missing. Leave the invalids as is
     TableData = vObj.PlotItemAsInvalidTable;
